@@ -5,6 +5,7 @@ from app.keycloak_api import keycloak_admin
 from sqlalchemy.orm import selectinload
 from app.auth import get_current_user
 from app.db import get_db
+from app.metrics import REQUEST_COUNT
 from app.models import Profile, Specialization
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -171,6 +172,7 @@ async def update_user(
 
 @router.get("/api/users/search", response_model=list[SearchHit])
 async def search_users(query: str = "", _=Depends(get_current_user)):
+    REQUEST_COUNT.inc()
     es = get_es_instance()
     response = await es.search(
         index="users",

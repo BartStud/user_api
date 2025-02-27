@@ -2,10 +2,11 @@ from contextlib import asynccontextmanager
 
 from app.routers import users
 from app.routers import specializations
+from app.routers import metrics
 from app.es.index import init_indices
 from app.es.instance import get_es_instance
 from app.es.utils import wait_for_elasticsearch
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 
 
 es = get_es_instance()
@@ -25,3 +26,4 @@ app = FastAPI(lifespan=lifespan)
 
 app.include_router(users.router)
 app.include_router(specializations.router)
+app.include_router(metrics.router)
