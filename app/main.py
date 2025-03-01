@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 
+from app.minio import init_minio_bucket
 from app.routers import users
 from app.routers import specializations
 from app.routers import metrics
@@ -18,6 +19,8 @@ async def lifespan(app: FastAPI):
         raise Exception("Elasticsearch is not available after waiting")
 
     await init_indices(es)
+
+    init_minio_bucket()
 
     yield
 

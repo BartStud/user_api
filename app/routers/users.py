@@ -1,3 +1,5 @@
+import os
+import uuid
 from typing import Optional
 
 from app.es.index import index_user
@@ -6,13 +8,16 @@ from sqlalchemy.orm import selectinload
 from app.auth import get_current_user
 from app.db import get_db
 from app.metrics import REQUEST_COUNT
+from app.minio import MINIO_BUCKET, get_minio_client
 from app.models import Profile, Specialization
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import attributes
 from app.es.instance import get_es_instance
+from io import BytesIO
+from minio.error import S3Error
+
 
 router = APIRouter()
 
@@ -60,6 +65,7 @@ async def get_current_user_data(
         "firstName": user.given_name,
         "lastName": user.family_name,
         "username": user.name,
+        "picture": user_profile.picture,
         "description": user_profile.description,
         "about_me": user_profile.about_me,
         "location": user_profile.location,
@@ -89,6 +95,7 @@ async def get_user(
         "email": user_data["email"],
         "firstName": user_data["firstName"],
         "lastName": user_data["lastName"],
+        "picture": profile.picture,
         "description": profile.description,
         "about_me": profile.about_me,
         "location": profile.location,
@@ -163,6 +170,7 @@ async def update_user(
         "email": user_data.email,
         "firstName": user_data.firstName,
         "lastName": user_data.lastName,
+        "picture": profile.picture,
         "description": profile.description,
         "about_me": profile.about_me,
         "location": profile.location,
@@ -208,3 +216,51 @@ async def search_users(query: str = "", _=Depends(get_current_user)):
         }
         for hit in hits
     ]
+
+
+@router.post("/api/users/users/current/picture", status_code=status.HTTP_201_CREATED)
+async def upload_media(
+    file: UploadFile = File(...),
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    minio_client=Depends(get_minio_client),
+):
+    allowed_extensions = {".jpg", ".jpeg", ".png"}
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in allowed_extensions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Niedozwolony format pliku: {ext}",
+        )
+
+    unique_filename = f"{uuid.uuid4()}{ext}"
+
+    try:
+        file_data = await file.read()
+        file_size = len(file_data)
+        file_stream = BytesIO(file_data)
+        minio_client.put_object(
+            MINIO_BUCKET,
+            unique_filename,
+            file_stream,
+            file_size,
+            content_type=file.content_type,
+        )
+    except S3Error as e:
+        print(e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Błąd podczas uploadu do MinIO",
+        )
+
+    media_url = f"http://localhost:9000/{MINIO_BUCKET}/{unique_filename}"
+
+    user = await db.execute(select(Profile).where(Profile.id == user["sub"]))
+    user = user.scalar()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.picture = media_url
+    await db.commit()
+
+    return {"url": media_url}
