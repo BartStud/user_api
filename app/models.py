@@ -1,5 +1,7 @@
+import enum
+import uuid
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Column, ForeignKey, String, Table
+from sqlalchemy import ARRAY, Column, Enum, ForeignKey, Integer, Numeric, String, Table
 from sqlalchemy.orm import relationship
 
 
@@ -28,6 +30,10 @@ class Profile(Base):
         "Specialization", secondary=profile_specialization, back_populates="profiles"
     )
 
+    services = relationship(
+        "Service", back_populates="profile", cascade="all, delete-orphan"
+    )
+
 
 class Specialization(Base):
     __tablename__ = "specializations"
@@ -39,3 +45,36 @@ class Specialization(Base):
     profiles = relationship(
         "Profile", secondary=profile_specialization, back_populates="specializations"
     )
+
+
+class MediaType(enum.Enum):
+    image = "image"
+    video = "video"
+
+
+class Service(Base):
+    __tablename__ = "services"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String, nullable=False)
+    description = Column(String)
+    price = Column(Numeric, nullable=False)
+    times = Column(ARRAY(Integer))
+
+    profile_id = Column(String, ForeignKey("profiles.id"), nullable=False)
+    profile = relationship("Profile", back_populates="services")
+
+    media = relationship(
+        "ServiceMedia", back_populates="service", cascade="all, delete-orphan"
+    )
+
+
+class ServiceMedia(Base):
+    __tablename__ = "service_media"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    service_id = Column(String, ForeignKey("services.id"), nullable=False)
+    media_type = Column(Enum(MediaType), nullable=False)
+    media_url = Column(String, nullable=False)
+
+    service = relationship("Service", back_populates="media")
