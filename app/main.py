@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from app.minio import init_minio_bucket
 from app.routers import users
 from app.routers import specializations
+from app.routers import socials
 from app.routers import metrics
 from app.es.index import init_indices
 from app.es.instance import get_es_instance
@@ -30,3 +31,4 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(users.router)
 app.include_router(specializations.router)
 app.include_router(metrics.router)
+app.include_router(socials.router)

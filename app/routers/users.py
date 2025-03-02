@@ -22,6 +22,15 @@ from minio.error import S3Error
 router = APIRouter()
 
 
+class SocialLinkOut(BaseModel):
+    id: int
+    platform: str
+    url: str
+
+    class Config:
+        orm_mode = True
+
+
 class ProfileData(BaseModel):
     # keycloak data
     id: str | None = None
@@ -35,6 +44,7 @@ class ProfileData(BaseModel):
     description: str | None = None
     about_me: str | None = None
     specializations: list[str] = []
+    social_links: list[SocialLinkOut] = []
 
 
 class SearchHit(BaseModel):
@@ -50,15 +60,18 @@ async def get_current_user_data(
     user=Depends(get_current_user), db: AsyncSession = Depends(get_db)
 ):
     user, profile = user
-    user_profile = await db.execute(
+    result = await db.execute(
         select(Profile)
-        .options(selectinload(Profile.specializations))
+        .options(
+            selectinload(Profile.specializations), selectinload(Profile.social_links)
+        )
         .where(Profile.id == user["sub"])
     )
-    user_profile = user_profile.scalar()
+    user_profile = result.scalar()
 
     if not user_profile:
         raise HTTPException(status_code=404, detail="User not found")
+
     return {
         "id": user["sub"],
         "email": user["email"],
@@ -70,6 +83,10 @@ async def get_current_user_data(
         "about_me": user_profile.about_me,
         "location": user_profile.location,
         "specializations": [spec.id for spec in user_profile.specializations],
+        "social_links": [
+            {"id": link.id, "platform": link.platform, "url": link.url}
+            for link in user_profile.social_links
+        ],
     }
 
 
@@ -79,7 +96,9 @@ async def get_user(
 ):
     result = await db.execute(
         select(Profile)
-        .options(selectinload(Profile.specializations))
+        .options(
+            selectinload(Profile.specializations), selectinload(Profile.social_links)
+        )
         .where(Profile.id == user_id)
     )
     profile = result.scalar()
@@ -88,7 +107,7 @@ async def get_user(
 
     if not profile:
         raise HTTPException(status_code=404, detail="User not found")
-    print(user_data)
+
     return {
         "id": profile.id,
         "username": user_data["username"],
@@ -100,6 +119,10 @@ async def get_user(
         "about_me": profile.about_me,
         "location": profile.location,
         "specializations": [spec.id for spec in profile.specializations],
+        "social_links": [
+            {"id": link.id, "platform": link.platform, "url": link.url}
+            for link in profile.social_links
+        ],
     }
 
 
@@ -110,12 +133,14 @@ async def update_user(
     user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    profile = await db.execute(
+    result = await db.execute(
         select(Profile)
-        .options(selectinload(Profile.specializations))
+        .options(
+            selectinload(Profile.specializations), selectinload(Profile.social_links)
+        )
         .where(Profile.id == user_id)
     )
-    profile = profile.scalar()
+    profile = result.scalar()
 
     if not profile:
         raise HTTPException(status_code=404, detail="User not found")
@@ -124,15 +149,12 @@ async def update_user(
         select(Specialization).where(Specialization.id.in_(user_data.specializations))
     )
     specializations = result.scalars().all()
-    # with db.no_autoflush:
     profile.about_me = user_data.about_me
     profile.description = user_data.description
-    # profile.specializations.append(specializations)
-    # attributes.set_committed_value(profile, "specializations", specializations)
+    profile.location = user_data.location
     profile.specializations.clear()
     profile.specializations.extend(specializations)
     await db.commit()
-    # await db.refresh(profile)
 
     response = keycloak_admin.update_user(
         user_id,
@@ -142,27 +164,25 @@ async def update_user(
             "lastName": user_data.lastName,
         },
     )
-    # if not response["ok"]:
-    #     raise HTTPException(status_code=500, detail="Błąd synchronizacji z Keycloak")
 
     result = await db.execute(
         select(Profile)
-        .options(selectinload(Profile.specializations))
+        .options(
+            selectinload(Profile.specializations), selectinload(Profile.social_links)
+        )
         .where(Profile.id == user_id)
     )
+    profile: Profile = result.scalar()
+    if not profile:
+        raise HTTPException(status_code=404, detail="User not found")
 
+    # Opcjonalnie indeksujemy użytkownika w Elasticsearch
     await index_user(
         get_es_instance(),
         user_id,
         f"{user_data.firstName} {user_data.lastName}",
         user_data.about_me or "",
     )
-
-    profile: Profile = result.scalar()
-    if not profile:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    specializations_ids = [spec.id for spec in profile.specializations]
 
     return {
         "id": profile.id,
@@ -174,7 +194,11 @@ async def update_user(
         "description": profile.description,
         "about_me": profile.about_me,
         "location": profile.location,
-        "specializations": specializations_ids,
+        "specializations": [spec.id for spec in profile.specializations],
+        "social_links": [
+            {"id": link.id, "platform": link.platform, "url": link.url}
+            for link in profile.social_links
+        ],
     }
 
 
