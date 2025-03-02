@@ -60,11 +60,11 @@ async def get_current_user_data(
     if not user_profile:
         raise HTTPException(status_code=404, detail="User not found")
     return {
-        "id": user.id,
-        "email": user.email,
-        "firstName": user.given_name,
-        "lastName": user.family_name,
-        "username": user.name,
+        "id": user["sub"],
+        "email": user["email"],
+        "firstName": user["given_name"],
+        "lastName": user["family_name"],
+        "username": user["preferred_username"],
         "picture": user_profile.picture,
         "description": user_profile.description,
         "about_me": user_profile.about_me,
