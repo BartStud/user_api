@@ -1,6 +1,6 @@
 import os
 import uuid
-from typing import Optional
+from typing import List, Optional
 
 from app.es.index import index_user
 from app.keycloak_api import keycloak_admin
@@ -41,6 +41,8 @@ class ProfileData(BaseModel):
     username: str | None = None
 
     # profile data
+    picture: str | None = None
+    location: str | None = None
     description: str | None = None
     about_me: str | None = None
     specializations: list[str] = []
@@ -53,6 +55,16 @@ class SearchHit(BaseModel):
     description: str
     type: str
     location: str
+
+class ProfilePatch(BaseModel):
+    email: Optional[str] = None
+    firstName: Optional[str] = None
+    lastName: Optional[str] = None
+    about_me: Optional[str] = None
+    description: Optional[str] = None
+    location: Optional[str] = None
+    username: Optional[str] = None
+    specializations: Optional[List[str]] = None
 
 
 @router.get("/api/users/users/current", response_model=ProfileData)
@@ -69,15 +81,21 @@ async def get_current_user_data(
     )
     user_profile = result.scalar()
 
+    response = keycloak_admin.get_user(
+        user["sub"],
+    )
+
+    user = response
+
     if not user_profile:
         raise HTTPException(status_code=404, detail="User not found")
 
     return {
-        "id": user["sub"],
+        "id": user["id"],
         "email": user["email"],
-        "firstName": user["given_name"],
-        "lastName": user["family_name"],
-        "username": user["preferred_username"],
+        "firstName": user["firstName"],
+        "lastName": user["lastName"],
+        "username": user["username"],
         "picture": user_profile.picture,
         "description": user_profile.description,
         "about_me": user_profile.about_me,
@@ -201,6 +219,92 @@ async def update_user(
         ],
     }
 
+@router.patch("/api/users/users/{user_id}", response_model=ProfileData)
+async def patch_user(
+    user_id: str,
+    user_patch: ProfilePatch,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # Pobierz profil z bazy danych wraz z relacjami
+    result = await db.execute(
+        select(Profile)
+        .options(selectinload(Profile.specializations), selectinload(Profile.social_links))
+        .where(Profile.id == user_id)
+    )
+    profile = result.scalar()
+
+    if not profile:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Aktualizacja pól, jeśli zostały przesłane
+    if user_patch.about_me is not None:
+        profile.about_me = user_patch.about_me
+    if user_patch.description is not None:
+        profile.description = user_patch.description
+    if user_patch.location is not None:
+        profile.location = user_patch.location
+    if user_patch.username is not None:
+        profile.username = user_patch.username  # Jeśli masz takie pole w modelu, w przeciwnym razie pomiń
+
+    # Aktualizacja specjalizacji: jeśli przesłano listę, pobieramy odpowiadające obiekty
+    if user_patch.specializations is not None:
+        spec_result = await db.execute(
+            select(Specialization).where(Specialization.id.in_(user_patch.specializations))
+        )
+        specializations = spec_result.scalars().all()
+        profile.specializations.clear()
+        profile.specializations.extend(specializations)
+
+    await db.commit()
+
+    # Aktualizacja danych w Keycloak (tylko jeśli przesłano odpowiednie pola)
+    update_data = {}
+    if user_patch.email is not None:
+        update_data["email"] = user_patch.email
+    if user_patch.firstName is not None:
+        update_data["firstName"] = user_patch.firstName
+    if user_patch.lastName is not None:
+        update_data["lastName"] = user_patch.lastName
+
+    if update_data:
+        response = keycloak_admin.update_user(user_id, update_data)
+        # Możesz opcjonalnie sprawdzić status odpowiedzi
+
+    # Ponowne pobranie profilu z bazy, aby mieć aktualne dane wraz z relacjami
+    result = await db.execute(
+        select(Profile)
+        .options(selectinload(Profile.specializations), selectinload(Profile.social_links))
+        .where(Profile.id == user_id)
+    )
+    profile = result.scalar()
+    if not profile:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Opcjonalne indeksowanie w Elasticsearch
+    await index_user(
+        get_es_instance(),
+        user_id,
+        f"{user_patch.firstName or profile.firstName} {user_patch.lastName or profile.lastName}",
+        user_patch.about_me or profile.about_me or "",
+    )
+
+    return {
+        "id": profile.id,
+        "username": user_patch.username or getattr(profile, "username", None),
+        "email": user_patch.email or getattr(profile, "email", None),
+        "firstName": user_patch.firstName or getattr(profile, "firstName", None),
+        "lastName": user_patch.lastName or getattr(profile, "lastName", None),
+        "picture": profile.picture,
+        "description": profile.description,
+        "about_me": profile.about_me,
+        "location": profile.location,
+        "specializations": [spec.id for spec in profile.specializations],
+        "social_links": [
+            {"id": link.id, "platform": link.platform, "url": link.url}
+            for link in profile.social_links
+        ],
+    }
 
 @router.get("/api/users/search", response_model=list[SearchHit])
 async def search_users(query: str = "", _=Depends(get_current_user)):
@@ -258,6 +362,7 @@ async def upload_media(
         )
 
     unique_filename = f"{uuid.uuid4()}{ext}"
+    user, profile = user
 
     try:
         file_data = await file.read()
@@ -288,3 +393,24 @@ async def upload_media(
     await db.commit()
 
     return {"url": media_url}
+
+@router.get("/admin/api/users/users/{user_id}", response_model=ProfileData)
+async def admin_get_user(user_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Profile).where(Profile.id == user_id))
+    profile = result.scalar()
+
+    user_data = keycloak_admin.get_user(user_id)
+
+    if not profile:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return {
+        "id": profile.id,
+        "username": user_data["username"],
+        "email": user_data["email"],
+        "firstName": user_data["firstName"],
+        "lastName": user_data["lastName"],
+        "picture": profile.picture,
+        "location": profile.location,
+    }
+ 

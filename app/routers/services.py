@@ -4,13 +4,13 @@ from typing import List, Optional
 from pydantic import BaseModel
 
 import uuid
-from fastapi import APIRouter, File, HTTPException, Depends, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Depends, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.auth import get_current_user
 from app.minio import MINIO_BUCKET, get_minio_client
-from models import MediaType, Service, ServiceMedia
+from app.models import MediaType, Service, ServiceMedia
 from app.db import get_db
 from minio.error import S3Error
 
@@ -65,11 +65,28 @@ async def create_service(
     return new_service
 
 
+
 @router.get("/", response_model=List[ServiceResponse])
 async def get_all_services(
-    user=Depends(get_current_user), db: AsyncSession = Depends(get_db)
+    user_id=Query(None),
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Service))
+    q = select(Service)
+    if user_id:
+        q = q.where(Service.profile_id == user_id)
+
+    result = await db.execute(q)
+    services = result.scalars().all()
+    return services
+
+@router.get("/user/{profile_id}", response_model=List[ServiceResponse])
+async def get_services_for_user(
+    profile_id: str,
+    user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Service).where(Service.profile_id == profile_id))
     services = result.scalars().all()
     return services
 

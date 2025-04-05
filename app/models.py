@@ -1,7 +1,7 @@
 import enum
 import uuid
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import ARRAY, Column, Enum, ForeignKey, Integer, Numeric, String, Table
+from sqlalchemy import ARRAY, Column, Date, DateTime, Enum, Float, ForeignKey, Integer, Numeric, String, Table, Text, func
 from sqlalchemy.orm import relationship
 
 
@@ -37,6 +37,9 @@ class Profile(Base):
     social_links = relationship(
         "SocialLink", back_populates="profile", cascade="all, delete-orphan"
     )
+
+    pets = relationship("Pet", back_populates="owner", cascade="all, delete-orphan")
+
 
 
 class SocialLink(Base):
@@ -93,3 +96,22 @@ class ServiceMedia(Base):
     media_url = Column(String, nullable=False)
 
     service = relationship("Service", back_populates="media")
+
+
+class Pet(Base):
+    __tablename__ = "pets"
+
+    id = Column(String, primary_key=True, index=True, default=func.uuid_generate_v4())
+    name = Column(String, nullable=False)
+    species = Column(String, nullable=False)
+    breed = Column(String, nullable=True)
+    gender = Column(String, nullable=True)
+    date_of_birth = Column(Date, nullable=True)
+    weight = Column(Float, nullable=True)
+    owner_id = Column(String, ForeignKey("profiles.id"), nullable=False)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, onupdate=func.now())
+
+    owner = relationship("Profile", back_populates="pets")
+ 

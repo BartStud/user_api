@@ -10,6 +10,9 @@ from app.es.instance import get_es_instance
 from app.es.utils import wait_for_elasticsearch
 from fastapi import FastAPI, Response
 
+from app.routers import services
+from app.routers import pets
+
 
 es = get_es_instance()
 
@@ -32,3 +35,5 @@ app.include_router(users.router)
 app.include_router(specializations.router)
 app.include_router(metrics.router)
 app.include_router(socials.router)
+app.include_router(services.router)
+app.include_router(pets.router)
